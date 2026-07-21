@@ -1,0 +1,23 @@
+# 가상환경 (다른 컴퓨터로 옮길 필요 없음)
+venv/
+
+# 빌드 산출물 (PyInstaller)
+build/
+dist/
+
+# Python 캐시
+__pycache__/
+*.pyc
+
+# 이 컴퓨터 전용 바로가기 (경로가 로컬 절대경로라 다른 컴퓨터에서 무의미)
+*.lnk
+
+# 사내 전용 문서 (제외)
+dongle_setup_usage.pdf
+
+# 테스트/참고용 대용량 PDF (저작권 있는 타사 문서 - 업로드 제외, 로컬 테스트용으로만 보관)
+sample/
+
+# OS/에디터 임시 파일
+.DS_Store
+Thumbs.db
