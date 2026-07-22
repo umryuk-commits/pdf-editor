@@ -8,7 +8,7 @@ import tempfile
 
 import fitz
 from PySide6.QtCore import QPoint, QSettings, QSize, Qt, QTimer
-from PySide6.QtGui import QAction, QActionGroup, QColor, QIcon, QKeySequence
+from PySide6.QtGui import QAction, QActionGroup, QColor, QGuiApplication, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QApplication, QColorDialog, QDockWidget, QFileDialog,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
@@ -16,7 +16,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget, QSizePolicy,
 )
 
+import icons
 from canvas import PageCanvas, Tool, TOOL_TR_KEYS, pixmap_from_fitz_pixmap
+from capture_overlay import CaptureOverlay
 from i18n import available_languages, get_language, set_language, tr
 from print_dialog import PrintDialog
 from version import APP_DESIGNER, APP_LICENSE, APP_PUBLISHER, APP_STAGE, APP_VERSION
@@ -24,6 +26,29 @@ from version import APP_DESIGNER, APP_LICENSE, APP_PUBLISHER, APP_STAGE, APP_VER
 TOOL_ORDER = [
     Tool.NONE, Tool.HIGHLIGHT, Tool.UNDERLINE, Tool.STRIKEOUT, Tool.NOTE,
     Tool.FREETEXT, Tool.PEN, Tool.RECT, Tool.ELLIPSE, Tool.ERASER, Tool.EDIT_TEXT,
+]
+
+TOOL_ICONS = {
+    Tool.NONE: icons.icon_select,
+    Tool.HIGHLIGHT: icons.icon_highlight,
+    Tool.UNDERLINE: icons.icon_underline,
+    Tool.STRIKEOUT: icons.icon_strikeout,
+    Tool.NOTE: icons.icon_note,
+    Tool.FREETEXT: icons.icon_freetext,
+    Tool.PEN: icons.icon_pen,
+    Tool.RECT: icons.icon_rect,
+    Tool.ELLIPSE: icons.icon_ellipse,
+    Tool.ERASER: icons.icon_eraser,
+    Tool.EDIT_TEXT: icons.icon_edit_text,
+}
+
+# 색상 팔레트 줄은 이 도구들을 고를 때만 나타남(색상을 실제로 쓰는 도구만).
+COLOR_TOOLS = {Tool.HIGHLIGHT, Tool.UNDERLINE, Tool.STRIKEOUT, Tool.PEN, Tool.RECT, Tool.ELLIPSE}
+
+# 팔레트 줄에 항상 보이는 프리셋 색상(부족하면 "더보기..."로 전체 색상 선택).
+PRESET_COLORS = [
+    QColor("#e74c3c"), QColor("#e67e22"), QColor("#f1c40f"),
+    QColor("#2ecc71"), QColor("#3498db"), QColor("#2c3e50"),
 ]
 
 THUMB_ZOOM = 0.18
@@ -47,6 +72,8 @@ class DocumentView(QWidget):
         self.canvas.redoAvailable.connect(lambda _avail: main_window._sync_undo_redo_actions())
         self.canvas.pageContentChanged.connect(lambda idx, v=self: main_window._refresh_one_thumbnail(v, idx))
         self.canvas.sizeChanged.connect(self._resync_page_area)
+        self.canvas.captureInserted.connect(
+            lambda: main_window.statusBar().showMessage(tr("status_capture_placed")))
 
         self.page_area = QWidget()
         self.page_area.setStyleSheet("background-color: #6e6e6e;")
@@ -119,7 +146,7 @@ class MainWindow(QMainWindow):
         self.resize(1100, 850)
 
         self._current_tool = Tool.NONE
-        self._current_color = QColor("red")
+        self._current_color = QColor(PRESET_COLORS[0])
 
         self.tabs = QTabWidget()
         self.tabs.setTabsClosable(True)
@@ -396,7 +423,11 @@ class MainWindow(QMainWindow):
         page_idx, rect = matches[idx]
         self.canvas.search_highlight = (page_idx, rect)
         self.search_count_label.setText(f"{idx + 1} / {len(matches)}")
-        target_y = self.canvas.y() + int(self.canvas.page_tops[page_idx] + rect.y0 * self.canvas.zoom) - 60
+        # rect(page.search_for 결과)는 원본(mediabox) 좌표라서, 회전된 페이지에서는
+        # 화면표시 좌표로 옮긴 y값으로 스크롤 위치를 계산해야 실제 위치로 이동한다.
+        page = self.canvas.doc.load_page(page_idx)
+        disp_y0 = (rect * page.rotation_matrix).y0
+        target_y = self.canvas.y() + int(self.canvas.page_tops[page_idx] + disp_y0 * self.canvas.zoom) - 60
         self.scroll.verticalScrollBar().setValue(max(0, target_y))
         self.canvas.update()
 
@@ -458,6 +489,11 @@ class MainWindow(QMainWindow):
         self.act_find.triggered.connect(self.toggle_search_bar)
         edit_menu.addAction(self.act_find)
 
+        edit_menu.addSeparator()
+        self.act_capture = QAction(tr("capture"), self)
+        self.act_capture.triggered.connect(self.start_screen_capture)
+        edit_menu.addAction(self.act_capture)
+
         page_menu = self.menuBar().addMenu(tr("menu_page"))
         self.act_insert_page = QAction(tr("insert_page"), self)
         self.act_insert_page.triggered.connect(self.insert_page)
@@ -501,7 +537,7 @@ class MainWindow(QMainWindow):
         lang_menu = self.menuBar().addMenu(tr("menu_language"))
         lang_group = QActionGroup(self)
         lang_group.setExclusive(True)
-        lang_names = {"ko": "한국어", "en": "English"}
+        lang_names = {"ko": "한국어", "en": "English", "zh": "中文", "ja": "日本語"}
         for code in available_languages():
             action = QAction(lang_names.get(code, code), self)
             action.setCheckable(True)
@@ -516,70 +552,99 @@ class MainWindow(QMainWindow):
         help_menu.addAction(act_about)
 
     def _build_toolbar(self):
+        # 툴바 하나에 모든 버튼을 다 넣으면, 창 폭이 좁을 때 안 들어가는 버튼들이
+        # "»" 오버플로 버튼 뒤로 숨어버려 바로 안 보이는 문제가 있었다. 성격이 다른
+        # 그룹별로 줄을 나눠서(각 줄의 폭 요구량을 줄여) 웬만한 창 크기에서는
+        # 오버플로 없이 전부 한 번에 보이게 한다.
+        file_toolbar = QToolBar("파일/편집")
+        file_toolbar.setMovable(False)
+        file_toolbar.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.addToolBar(file_toolbar)
+
+        self.act_open.setIcon(icons.icon_open())
+        self.act_save.setIcon(icons.icon_save())
+        self.act_print.setIcon(icons.icon_print())
+        self.act_undo.setIcon(icons.icon_undo())
+        self.act_redo.setIcon(icons.icon_redo())
+        self.act_find.setIcon(icons.icon_find())
+        self.act_capture.setIcon(icons.icon_capture())
+
+        file_toolbar.addAction(self.act_open)
+        file_toolbar.addAction(self.act_save)
+        file_toolbar.addAction(self.act_print)
+        file_toolbar.addAction(self.act_undo)
+        file_toolbar.addAction(self.act_redo)
+        file_toolbar.addAction(self.act_find)
+        file_toolbar.addAction(self.act_capture)
+
+        self.addToolBarBreak()
         toolbar = QToolBar("도구")
         toolbar.setMovable(False)
+        toolbar.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.addToolBar(toolbar)
 
-        toolbar.addAction(self.act_open)
-        toolbar.addAction(self.act_save)
-        toolbar.addAction(self.act_print)
-        toolbar.addAction(self.act_undo)
-        toolbar.addAction(self.act_redo)
-        toolbar.addAction(self.act_find)
-        toolbar.addSeparator()
-
+        # 주석류 도구(선택~텍스트박스)와 그리기류 도구(펜~텍스트수정) 사이에
+        # 구분선만 넣고 한 줄에 배치한다(사용자 요청으로 두 줄 → 한 줄로 되돌림).
+        half = (len(TOOL_ORDER) + 1) // 2
         self.tool_group = QActionGroup(self)
         self.tool_group.setExclusive(True)
-        for tool in TOOL_ORDER:
-            action = QAction(tr(TOOL_TR_KEYS[tool]), self)
+        for i, tool in enumerate(TOOL_ORDER):
+            if i == half:
+                toolbar.addSeparator()
+            action = QAction(TOOL_ICONS[tool](), tr(TOOL_TR_KEYS[tool]), self)
             action.setCheckable(True)
             action.setChecked(tool == Tool.NONE)
             action.triggered.connect(lambda checked, t=tool: self._select_tool(t))
             self.tool_group.addAction(action)
             toolbar.addAction(action)
 
-        toolbar.addSeparator()
-        self.act_color = QAction(tr("color"), self)
-        self.act_color.triggered.connect(self.pick_color)
-        toolbar.addAction(self.act_color)
+        # 색상 팔레트 줄 — 색상을 실제로 쓰는 도구(펜/사각형/원/하이라이트/밑줄/
+        # 취소선)를 고를 때만 나타남. 늘 떠 있는 "색상" 버튼 하나를 별도로 두는
+        # 대신, 필요한 도구를 고를 때만 자연스럽게 등장하게 함.
+        self.addToolBarBreak()
+        self._build_color_toolbar()
 
-        toolbar.addSeparator()
+        self.addToolBarBreak()
+        nav_toolbar = QToolBar("보기/이동")
+        nav_toolbar.setMovable(False)
+        self.addToolBar(nav_toolbar)
+
         act_zoom_out = QAction("-", self)
         act_zoom_out.triggered.connect(lambda: self.set_zoom(self.canvas.zoom / 1.25))
-        toolbar.addAction(act_zoom_out)
+        nav_toolbar.addAction(act_zoom_out)
 
         self.zoom_label = QLabel("100%")
         self.zoom_label.setFixedWidth(50)
         self.zoom_label.setAlignment(Qt.AlignCenter)
-        toolbar.addWidget(self.zoom_label)
+        nav_toolbar.addWidget(self.zoom_label)
 
         act_zoom_in = QAction("+", self)
         act_zoom_in.triggered.connect(lambda: self.set_zoom(self.canvas.zoom * 1.25))
-        toolbar.addAction(act_zoom_in)
+        nav_toolbar.addAction(act_zoom_in)
 
-        toolbar.addAction(self.act_fit_width)
-        toolbar.addAction(self.act_fit_page)
+        nav_toolbar.addAction(self.act_fit_width)
+        nav_toolbar.addAction(self.act_fit_page)
 
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        toolbar.addWidget(spacer)
+        nav_toolbar.addWidget(spacer)
 
         self.act_prev = QAction(tr("prev_page"), self)
         self.act_prev.triggered.connect(self.prev_page)
-        toolbar.addAction(self.act_prev)
+        nav_toolbar.addAction(self.act_prev)
 
         self.page_spin = QSpinBox()
         self.page_spin.setMinimum(1)
         self.page_spin.setMaximum(1)
         self.page_spin.valueChanged.connect(self._on_page_spin_changed)
-        toolbar.addWidget(self.page_spin)
+        nav_toolbar.addWidget(self.page_spin)
 
         self.page_count_label = QLabel("/ 0")
-        toolbar.addWidget(self.page_count_label)
+        nav_toolbar.addWidget(self.page_count_label)
 
         self.act_next = QAction(tr("next_page"), self)
         self.act_next.triggered.connect(self.next_page)
-        toolbar.addAction(self.act_next)
+        nav_toolbar.addAction(self.act_next)
 
     # ---------- 언어/정보 ----------
 
@@ -809,6 +874,30 @@ class MainWindow(QMainWindow):
         if self.canvas and self.canvas.copy_to_clipboard():
             self.statusBar().showMessage(tr("status_copied"))
 
+    # ---------- 캡처 ----------
+
+    def start_screen_capture(self):
+        if not self.canvas or not self.canvas.doc:
+            return
+        # 이 창을 숨기지 않는다 — PDF 편집기 자신의 화면(지금 보고 있는 PDF 내용
+        # 포함)도 다른 창과 동등하게 캡처 대상이 되어야 한다. `CaptureOverlay`가
+        # 스스로 뜨기 "전"에 화면을 미리 캡처해두므로 오버레이 자신은 결과에 안 섞인다.
+        self._capture_overlay = CaptureOverlay()
+        self._capture_overlay.captured.connect(self._on_capture_captured)
+        self._capture_overlay.cancelled.connect(self._on_capture_cancelled)
+        self._capture_overlay.start()
+
+    def _on_capture_captured(self, pixmap):
+        self._capture_overlay = None
+        if not self.canvas or not self.canvas.doc:
+            return
+        QGuiApplication.clipboard().setPixmap(pixmap)
+        self.canvas.begin_image_placement(pixmap)
+        self.statusBar().showMessage(tr("status_capture_place"))
+
+    def _on_capture_cancelled(self):
+        self._capture_overlay = None
+
     def undo(self):
         if not self.canvas:
             return
@@ -829,10 +918,50 @@ class MainWindow(QMainWindow):
 
     # ---------- 도구/색상 ----------
 
+    def _build_color_toolbar(self):
+        self.color_toolbar = QToolBar(tr("color"))
+        self.color_toolbar.setMovable(False)
+        self.color_toolbar.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        self.addToolBar(self.color_toolbar)
+
+        self.color_toolbar.addWidget(QLabel(f" {tr('color')}: "))
+        self.color_group = QActionGroup(self)
+        self.color_group.setExclusive(True)
+        self.color_actions: dict[str, QAction] = {}
+        for color in PRESET_COLORS:
+            action = QAction(icons.swatch_icon(color), color.name(), self)
+            action.setCheckable(True)
+            action.setToolTip(color.name())
+            action.triggered.connect(lambda checked, c=color: self._pick_preset_color(c))
+            self.color_group.addAction(action)
+            self.color_toolbar.addAction(action)
+            self.color_actions[color.name()] = action
+
+        self.act_more_colors = QAction(icons.icon_palette(), tr("more_colors"), self)
+        self.act_more_colors.triggered.connect(self.pick_color)
+        self.color_toolbar.addAction(self.act_more_colors)
+
+        self._sync_color_toolbar_checked()
+        self._sync_color_toolbar_visibility()
+
+    def _sync_color_toolbar_visibility(self):
+        self.color_toolbar.setVisible(self._current_tool in COLOR_TOOLS)
+
+    def _sync_color_toolbar_checked(self):
+        name = self._current_color.name()
+        for color_name, action in self.color_actions.items():
+            action.setChecked(color_name == name)
+
+    def _pick_preset_color(self, color: QColor):
+        self._current_color = QColor(color)
+        if self.canvas:
+            self.canvas.color = self._current_color
+
     def _select_tool(self, tool: Tool):
         self._current_tool = tool
         if self.canvas:
             self.canvas.set_tool(tool)
+        self._sync_color_toolbar_visibility()
         self.statusBar().showMessage(tr("status_tool", tool=tr(TOOL_TR_KEYS[tool])))
 
     def pick_color(self):
@@ -841,6 +970,7 @@ class MainWindow(QMainWindow):
             self._current_color = color
             if self.canvas:
                 self.canvas.color = color
+            self._sync_color_toolbar_checked()
 
     # ---------- 상태 관리 ----------
 
@@ -853,10 +983,11 @@ class MainWindow(QMainWindow):
         for action in (self.act_save, self.act_save_as, self.act_print,
                        self.act_insert_page,
                        self.act_delete_page, self.act_rotate_page,
-                       self.act_prev, self.act_next, self.act_color,
+                       self.act_prev, self.act_next,
                        self.act_find, self.act_fit_width, self.act_fit_page,
-                       self.act_copy):
+                       self.act_copy, self.act_capture):
             action.setEnabled(has_doc)
+        self.color_toolbar.setEnabled(has_doc)
         for action in self.tool_group.actions():
             action.setEnabled(has_doc)
         self.act_close_tab.setEnabled(self.tabs.count() > 0)
@@ -871,6 +1002,10 @@ class MainWindow(QMainWindow):
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Escape and self.search_bar and self.search_bar.isVisible():
             self.close_search_bar()
+            return
+        if event.key() == Qt.Key_Escape and self.canvas and self.canvas.tool == Tool.CAPTURE_PLACE:
+            self.canvas.cancel_image_placement()
+            self.statusBar().showMessage(tr("status_capture_cancelled"))
             return
         super().keyPressEvent(event)
 

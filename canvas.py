@@ -6,8 +6,10 @@
 from enum import Enum
 
 import fitz
-from PySide6.QtCore import Qt, QPoint, QRect, QRectF, Signal
-from PySide6.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QCursor, QGuiApplication
+from PySide6.QtCore import Qt, QBuffer, QIODevice, QPoint, QRect, QRectF, Signal
+from PySide6.QtGui import (
+    QPixmap, QImage, QPainter, QPen, QColor, QCursor, QGuiApplication, QTransform,
+)
 from PySide6.QtWidgets import QWidget, QInputDialog, QMenu
 
 from i18n import tr
@@ -27,6 +29,7 @@ class Tool(str, Enum):
     ELLIPSE = "ellipse"
     ERASER = "eraser"
     EDIT_TEXT = "edit_text"
+    CAPTURE_PLACE = "capture_place"  # 캡처 직후, 페이지 위에 놓을 위치/크기를 정하는 임시 모드
 
 
 TOOL_TR_KEYS = {
@@ -47,6 +50,7 @@ TOOL_TR_KEYS = {
 DRAG_TOOLS = {
     Tool.HIGHLIGHT, Tool.UNDERLINE, Tool.STRIKEOUT,
     Tool.FREETEXT, Tool.PEN, Tool.RECT, Tool.ELLIPSE, Tool.EDIT_TEXT,
+    Tool.CAPTURE_PLACE,
 }
 CLICK_TOOLS = {Tool.NOTE, Tool.ERASER}
 
@@ -61,22 +65,28 @@ HANDLE_CURSORS = {
 
 def _fit_textbox(page: fitz.Page, rect: fitz.Rect, text: str,
                   start_size: float = 11, min_size: float = 6,
-                  fontname: str = "helv", color=None):
+                  fontname: str = "helv", color=None, rotate: int = 0):
     """rect에 text가 들어가도록 폰트 크기를 줄여가며 삽입.
 
     insert_textbox()는 글자가 다 안 들어가면 반환값이 음수이고,
     이 경우 아무 텍스트도 그려지지 않는다 (조용히 버려짐). 그래서
     약간의 여백을 더하고, 안 들어가면 폰트를 줄여서 재시도한다.
+
+    `rotate`는 페이지의 `page.rotation`을 그대로 넘겨야 한다 — 원본 PDF의
+    텍스트는 페이지 회전이 적용된 뒤 화면에서 올바로 읽히도록 mediabox
+    좌표계 안에서 미리 그만큼 돌아간 방향으로 그려져 있어서, 새로 넣는
+    텍스트도 같은 각도로 안 돌리면 회전된 페이지에서 방향이 어긋나 보인다.
     """
     padded = fitz.Rect(rect.x0, rect.y0, rect.x1, rect.y1 + 4)
     fontsize = start_size
     while fontsize >= min_size:
         rc = page.insert_textbox(padded, text, fontsize=fontsize,
-                                  fontname=fontname, color=color)
+                                  fontname=fontname, color=color, rotate=rotate)
         if rc >= 0:
             return
         fontsize -= 1
-    page.insert_textbox(padded, text, fontsize=min_size, fontname=fontname, color=color)
+    page.insert_textbox(padded, text, fontsize=min_size, fontname=fontname,
+                         color=color, rotate=rotate)
 
 
 def _color_int_to_rgb(value: int) -> tuple:
@@ -134,16 +144,39 @@ def _snap_edit_target(page: fitz.Page, rect: fitz.Rect) -> dict | None:
     }
 
 
+def _remaining_width(page: fitz.Page, origin, rotation: int) -> float:
+    """origin에서 텍스트가 흐르는 방향(페이지 회전에 따른 방향)으로 원본
+    (mediabox) 페이지 끝까지 남은 공간(pt). 회전 없는 페이지는 원래처럼
+    +x 방향(오른쪽 끝까지)만 보면 되지만, 90/270도 회전 페이지는 텍스트가
+    mediabox 안에서 y축 방향으로 흐르므로(`insert_text`의 `rotate`와 짝을
+    이루는 방향, `_fit_textbox` 설명 참고) 그 방향으로 계산해야 한다."""
+    mb = page.mediabox
+    ox, oy = origin
+    if rotation == 90:
+        return oy - mb.y0
+    if rotation == 180:
+        return ox - mb.x0
+    if rotation == 270:
+        return mb.y1 - oy
+    return mb.x1 - ox
+
+
 def _insert_text_fit(page: fitz.Page, origin, text: str, start_size: float,
-                      fontname: str, color, max_width: float, min_size: float = 6):
-    """origin(기준선 좌표)에 text를 그리되, max_width를 넘으면 글꼴을 줄여서 맞춘다."""
+                      fontname: str, color, max_width: float, min_size: float = 6,
+                      rotate: int = 0):
+    """origin(기준선 좌표)에 text를 그리되, max_width를 넘으면 글꼴을 줄여서 맞춘다.
+
+    `rotate`는 `page.rotation`을 그대로 넘겨야 회전된 페이지에서도 기존 글자와
+    같은 방향으로 그려진다(자세한 이유는 `_fit_textbox`의 설명 참고).
+    """
     fontsize = start_size
     while fontsize > min_size:
         width = fitz.get_text_length(text, fontname=fontname, fontsize=fontsize)
         if width <= max_width:
             break
         fontsize -= 0.5
-    page.insert_text(origin, text, fontsize=fontsize, fontname=fontname, color=color)
+    page.insert_text(origin, text, fontsize=fontsize, fontname=fontname,
+                      color=color, rotate=rotate)
 
 
 def pixmap_from_fitz_pixmap(pix: fitz.Pixmap) -> QPixmap:
@@ -206,7 +239,7 @@ def cursor_for_tool(tool: "Tool") -> QCursor:
         _TOOL_CURSORS[Tool.PEN] = _pencil_cursor()
         _TOOL_CURSORS[Tool.ERASER] = _eraser_cursor()
         for t in (Tool.HIGHLIGHT, Tool.UNDERLINE, Tool.STRIKEOUT, Tool.RECT,
-                  Tool.ELLIPSE, Tool.FREETEXT, Tool.EDIT_TEXT):
+                  Tool.ELLIPSE, Tool.FREETEXT, Tool.EDIT_TEXT, Tool.CAPTURE_PLACE):
             _TOOL_CURSORS[t] = QCursor(Qt.CrossCursor)
     return _TOOL_CURSORS.get(tool, QCursor(Qt.ArrowCursor))
 
@@ -222,6 +255,7 @@ class PageCanvas(QWidget):
     redoAvailable = Signal(bool)
     sizeChanged = Signal()
     pageContentChanged = Signal(int)
+    captureInserted = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -251,6 +285,9 @@ class PageCanvas(QWidget):
         self.search_current = -1
         self.search_highlight: tuple[int, fitz.Rect] | None = None
 
+        self._pending_capture_pixmap: QPixmap | None = None
+        self._tool_before_capture: "Tool" = Tool.NONE
+
         self.selected_page_idx: int | None = None
         self.selected_xref: int | None = None
         self._selected_page_ref = None
@@ -270,6 +307,20 @@ class PageCanvas(QWidget):
         if tool != Tool.NONE:
             self.clear_selection()
             self.clear_text_selection()
+
+    # ---------- 캡처 삽입 ----------
+
+    def begin_image_placement(self, pixmap: QPixmap):
+        """캡처 결과를 들고, 페이지 위 클릭/드래그로 놓을 위치를 정하는 모드로 전환."""
+        self._pending_capture_pixmap = pixmap
+        self._tool_before_capture = self.tool
+        self.set_tool(Tool.CAPTURE_PLACE)
+
+    def cancel_image_placement(self):
+        if self.tool != Tool.CAPTURE_PLACE:
+            return
+        self._pending_capture_pixmap = None
+        self.set_tool(self._tool_before_capture)
 
     # ---------- 선택(이동/크기조절) ----------
 
@@ -310,10 +361,10 @@ class PageCanvas(QWidget):
             self.clear_text_selection()
             return
         page_idx = self._text_select_page_idx
-        pdf_p1 = self._to_pdf_point(self._select_drag_start, page_idx)
-        pdf_p2 = self._to_pdf_point(self._current_point, page_idx)
-        rect = _normalized_rect(pdf_p1, pdf_p2)
         page = self.doc.load_page(page_idx)
+        pdf_p1 = self._to_pdf_point(self._select_drag_start, page_idx, page)
+        pdf_p2 = self._to_pdf_point(self._current_point, page_idx, page)
+        rect = _normalized_rect(pdf_p1, pdf_p2)
         if page.get_textbox(rect).strip():
             self.text_selection = (page_idx, rect)
         else:
@@ -341,9 +392,19 @@ class PageCanvas(QWidget):
                 found = annot  # 마지막(가장 위에 그려진) 것을 우선
         return found
 
-    def _annot_widget_rect(self, annot, page_idx: int) -> QRect:
+    def _annot_widget_rect(self, annot, page_idx: int, page: fitz.Page | None = None) -> QRect:
+        """주석의 원본(mediabox) rect를 화면표시(회전 반영) 좌표로 바꿔 위젯 사각형으로 변환.
+
+        `annot.rect`는 항상 원본 좌표계라서, 페이지가 90/270도 회전돼 있으면
+        `page.rotation_matrix`로 먼저 화면표시 좌표계로 옮긴 다음에 zoom을 곱해야
+        선택 테두리/손잡이가 실제 보이는 위치에 그려진다. 호출부가 이미 페이지를
+        불러와 놨으면(`page` 인자) 매번 다시 `load_page()`하지 않고 재사용한다 —
+        이 함수는 마우스가 움직일 때마다(호버) 반복 호출될 수 있어서 중요하다.
+        """
         top = self.page_tops[page_idx]
-        r = annot.rect
+        if page is None:
+            page = self.doc.load_page(page_idx)
+        r = annot.rect * page.rotation_matrix
         z = self.zoom
         return QRect(int(r.x0 * z), int(top + r.y0 * z),
                      int((r.x1 - r.x0) * z), int((r.y1 - r.y0) * z))
@@ -355,7 +416,7 @@ class PageCanvas(QWidget):
             "bl": rect.bottomLeft(), "br": rect.bottomRight(),
         }
 
-    def _handle_at(self, pos: QPoint, annot=None) -> str | None:
+    def _handle_at(self, pos: QPoint, annot=None, page: fitz.Page | None = None) -> str | None:
         """주어진 화면 좌표가 선택된 주석의 크기조절 손잡이 위인지 확인.
 
         annot을 넘기지 않으면 새로 조회하는데, 한 번의 처리 안에서 이미 다른
@@ -365,16 +426,23 @@ class PageCanvas(QWidget):
         """
         if annot is None:
             annot = self.get_selected_annot()
+            page = self._selected_page_ref
         if annot is None:
             return None
-        rect = self._annot_widget_rect(annot, self.selected_page_idx)
+        rect = self._annot_widget_rect(annot, self.selected_page_idx, page)
         for name, pt in self._handle_positions(rect).items():
             if abs(pos.x() - pt.x()) <= HANDLE_SIZE and abs(pos.y() - pt.y()) <= HANDLE_SIZE:
                 return name
         return None
 
     def _drag_preview_rect(self) -> fitz.Rect:
-        """이동/크기조절 중 실시간으로 계산되는 PDF 좌표 사각형."""
+        """이동/크기조절 중 실시간으로 계산되는 화면표시(display) 좌표 사각형.
+
+        핸들(tl/tr/bl/br)은 화면에 보이는 대로의 위/아래/좌/우이므로, 이 함수는
+        항상 화면표시 좌표계에서 계산한다(회전된 페이지에서도 핸들 의미가 항상
+        맞도록). `_select_drag_orig_rect`도 화면표시 좌표계로 저장돼 있어야 하고,
+        실제로 문서에 반영할 때(`_commit_select_drag`)만 mediabox 좌표계로
+        변환한다."""
         dx = (self._current_point.x() - self._select_drag_start.x()) / self.zoom
         dy = (self._current_point.y() - self._select_drag_start.y()) / self.zoom
         r = self._select_drag_orig_rect
@@ -402,18 +470,23 @@ class PageCanvas(QWidget):
     def _handle_select_press(self, pos: QPoint):
         annot = self.get_selected_annot()
         if annot is not None:
-            handle = self._handle_at(pos, annot)
+            # _drag_preview_rect()가 화면표시 좌표계로 계산하므로, 드래그 시작
+            # 시점의 기준 rect도 같은 좌표계(회전 반영)로 맞춰서 저장한다.
+            # get_selected_annot()이 이미 불러온 page를 그대로 재사용한다.
+            page = self._selected_page_ref
+            display_rect = annot.rect * page.rotation_matrix
+            handle = self._handle_at(pos, annot, page)
             if handle:
                 self._select_drag_mode = "resize"
                 self._select_drag_handle = handle
                 self._select_drag_start = pos
-                self._select_drag_orig_rect = annot.rect
+                self._select_drag_orig_rect = display_rect
                 self._current_point = pos
                 return
-            if self._annot_widget_rect(annot, self.selected_page_idx).contains(pos):
+            if self._annot_widget_rect(annot, self.selected_page_idx, page).contains(pos):
                 self._select_drag_mode = "move"
                 self._select_drag_start = pos
-                self._select_drag_orig_rect = annot.rect
+                self._select_drag_orig_rect = display_rect
                 self._current_point = pos
                 return
 
@@ -423,7 +496,7 @@ class PageCanvas(QWidget):
             self.clear_text_selection()
             return
         page = self.doc.load_page(page_idx)
-        pdf_point = self._to_pdf_point(pos, page_idx)
+        pdf_point = self._to_pdf_point(pos, page_idx, page)
         found = self._find_movable_annot(page, pdf_point)
         if found is not None:
             self.selected_page_idx = page_idx
@@ -440,18 +513,23 @@ class PageCanvas(QWidget):
         self.update()
 
     def _update_hover_cursor(self, pos: QPoint):
+        # 이 함수는 마우스가 캔버스 위에서 움직일 때마다 호출되므로, 여기서
+        # `doc.load_page()`를 반복 호출하면 그만큼 매 프레임 비용이 든다 —
+        # get_selected_annot()이 이미 불러온 page(`_selected_page_ref`)를
+        # 계속 재사용해서 중복 로드를 피한다.
         annot = self.get_selected_annot()
-        handle = self._handle_at(pos, annot)
+        selected_page = self._selected_page_ref if annot is not None else None
+        handle = self._handle_at(pos, annot, selected_page)
         if handle:
             self.setCursor(QCursor(HANDLE_CURSORS[handle]))
             return
-        if annot is not None and self._annot_widget_rect(annot, self.selected_page_idx).contains(pos):
+        if annot is not None and self._annot_widget_rect(annot, self.selected_page_idx, selected_page).contains(pos):
             self.setCursor(QCursor(Qt.SizeAllCursor))
             return
         page_idx = self.page_at_y(pos.y())
         if page_idx is not None and self.doc:
             page = self.doc.load_page(page_idx)
-            pdf_point = self._to_pdf_point(pos, page_idx)
+            pdf_point = self._to_pdf_point(pos, page_idx, page)
             if self._find_movable_annot(page, pdf_point) is None:
                 self.setCursor(QCursor(Qt.IBeamCursor))
                 return
@@ -461,7 +539,10 @@ class PageCanvas(QWidget):
         annot = self.get_selected_annot()
         if annot is None:
             return
-        new_rect = self._drag_preview_rect()
+        page = self.doc.load_page(self.selected_page_idx)
+        # _drag_preview_rect()는 화면표시 좌표계라서, 저장 직전에 원본(mediabox)
+        # 좌표계로 되돌려야 한다.
+        new_rect = self._drag_preview_rect() * page.derotation_matrix
         self.push_undo()
         annot.set_rect(new_rect)
         annot.update()
@@ -572,10 +653,26 @@ class PageCanvas(QWidget):
 
     # ---------- 좌표 변환 ----------
 
-    def _to_pdf_point(self, widget_point: QPoint, page_index: int) -> fitz.Point:
+    def _to_pdf_point(self, widget_point: QPoint, page_index: int,
+                      page: fitz.Page | None = None) -> fitz.Point:
+        """화면(위젯) 좌표를 주석/편집 API가 기대하는 원본(mediabox) 좌표로 변환.
+
+        `page.rect`(=화면에 렌더링되는 크기)는 페이지가 90/270도 회전되어 있으면
+        가로세로가 뒤바뀐 "회전 반영" 좌표계다. 확대/축소만 되돌리면 이 회전 반영
+        좌표계 값이 나오는데, `add_rect_annot`/`insert_text`/`insert_image` 등은
+        회전이 적용되기 "전"의 원본 좌표계를 기대하므로 그대로 쓰면 회전된 페이지에서
+        편집 위치가 어긋난다. `page.derotation_matrix`로 한 번 더 보정해서 항상
+        원본 좌표계로 돌려준다(회전 없는 페이지는 이 행렬이 항등변환이라 영향 없음).
+
+        호출부가 이미 같은 페이지를 불러와 놨으면 `page`로 넘겨서 중복
+        `load_page()`를 피할 수 있다(마우스 드래그 중 반복 호출되는 경우가 많음).
+        """
         top = self.page_tops[page_index]
         inv = ~fitz.Matrix(self.zoom, self.zoom)
-        return fitz.Point(widget_point.x(), widget_point.y() - top) * inv
+        displayed = fitz.Point(widget_point.x(), widget_point.y() - top) * inv
+        if page is None:
+            page = self.doc.load_page(page_index)
+        return displayed * page.derotation_matrix
 
     # ---------- 그리기 ----------
 
@@ -624,8 +721,12 @@ class PageCanvas(QWidget):
             if 0 <= page_idx < len(self.page_tops):
                 top = self.page_tops[page_idx]
                 z = self.zoom
-                hl = QRectF(rect.x0 * z, top + rect.y0 * z,
-                            (rect.x1 - rect.x0) * z, (rect.y1 - rect.y0) * z)
+                # rect(page.search_for 결과)는 항상 원본(mediabox) 좌표라서,
+                # 회전된 페이지에서는 화면표시 좌표로 먼저 옮겨야 위치가 맞다.
+                page = self.doc.load_page(page_idx)
+                disp = rect * page.rotation_matrix
+                hl = QRectF(disp.x0 * z, top + disp.y0 * z,
+                            (disp.x1 - disp.x0) * z, (disp.y1 - disp.y0) * z)
                 painter.fillRect(hl, QColor(255, 165, 0, 120))
         if self._dragging:
             pen = QPen(self.color, 2, Qt.DashLine)
@@ -654,14 +755,19 @@ class PageCanvas(QWidget):
             quads = _word_quads_in_rect(page, rect) or [rect.quad]
             top = self.page_tops[page_idx]
             z = self.zoom
+            rot = page.rotation_matrix
             painter.setPen(Qt.NoPen)
             painter.setBrush(QColor(51, 153, 255, 90))
             for q in quads:
-                xs = (q.ul.x, q.ur.x, q.ll.x, q.lr.x)
-                ys = (q.ul.y, q.ur.y, q.ll.y, q.lr.y)
-                x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
-                painter.drawRect(QRectF(x0 * z, top + y0 * z,
-                                         (x1 - x0) * z, (y1 - y0) * z).toRect())
+                # get_text가 돌려주는 quad도 원본(mediabox) 좌표라서, 회전된
+                # 페이지에서는 화면표시 좌표로 옮긴 뒤에 그려야 위치가 맞다.
+                disp = fitz.Rect(min(q.ul.x, q.ur.x, q.ll.x, q.lr.x),
+                                  min(q.ul.y, q.ur.y, q.ll.y, q.lr.y),
+                                  max(q.ul.x, q.ur.x, q.ll.x, q.lr.x),
+                                  max(q.ul.y, q.ur.y, q.ll.y, q.lr.y)) * rot
+                painter.drawRect(QRectF(disp.x0 * z, top + disp.y0 * z,
+                                         (disp.x1 - disp.x0) * z,
+                                         (disp.y1 - disp.y0) * z).toRect())
 
         annot = self.get_selected_annot()
         if annot is None:
@@ -781,7 +887,7 @@ class PageCanvas(QWidget):
 
     def _handle_click_tool(self, point: QPoint, page_idx: int):
         page = self.doc.load_page(page_idx)
-        pdf_point = self._to_pdf_point(point, page_idx)
+        pdf_point = self._to_pdf_point(point, page_idx, page)
 
         if self.tool == Tool.NOTE:
             text, ok = QInputDialog.getMultiLineText(
@@ -800,11 +906,11 @@ class PageCanvas(QWidget):
                     break
 
     def _handle_drag_tool(self, p1: QPoint, p2: QPoint, page_idx: int):
-        if p1 == p2 and self.tool != Tool.PEN:
+        if p1 == p2 and self.tool not in (Tool.PEN, Tool.CAPTURE_PLACE):
             return
         page = self.doc.load_page(page_idx)
-        pdf_p1 = self._to_pdf_point(p1, page_idx)
-        pdf_p2 = self._to_pdf_point(p2, page_idx)
+        pdf_p1 = self._to_pdf_point(p1, page_idx, page)
+        pdf_p2 = self._to_pdf_point(p2, page_idx, page)
         rect = _normalized_rect(pdf_p1, pdf_p2)
         color = (self.color.redF(), self.color.greenF(), self.color.blueF())
 
@@ -853,7 +959,7 @@ class PageCanvas(QWidget):
                 return
             self.push_undo()
             pdf_points = [(p.x, p.y) for p in
-                          (self._to_pdf_point(pt, page_idx) for pt in self._pen_points)]
+                          (self._to_pdf_point(pt, page_idx, page) for pt in self._pen_points)]
             annot = page.add_ink_annot([pdf_points])
             annot.set_colors(stroke=color)
             annot.set_border(width=2)
@@ -887,16 +993,63 @@ class PageCanvas(QWidget):
                         fontname = _map_fontname(target["font"], target["flags"])
                         color = _color_int_to_rgb(target["color"])
                         if target["single_line"] and "\n" not in text:
-                            max_width = page.rect.width - target["origin"][0] - 10
+                            max_width = _remaining_width(
+                                page, target["origin"], page.rotation) - 10
                             _insert_text_fit(page, target["origin"], text,
-                                              target["size"], fontname, color, max_width)
+                                              target["size"], fontname, color, max_width,
+                                              rotate=page.rotation)
                         else:
                             _fit_textbox(page, edit_rect, text,
                                          start_size=target["size"],
-                                         fontname=fontname, color=color)
+                                         fontname=fontname, color=color,
+                                         rotate=page.rotation)
                     else:
-                        _fit_textbox(page, edit_rect, text)
+                        _fit_textbox(page, edit_rect, text, rotate=page.rotation)
                 self._finish_edit(page_idx)
+
+        elif self.tool == Tool.CAPTURE_PLACE:
+            self._place_captured_image(p1, p2, page_idx)
+
+    def _place_captured_image(self, p1: QPoint, p2: QPoint, page_idx: int):
+        pixmap = self._pending_capture_pixmap
+        if pixmap is None:
+            return
+        page = self.doc.load_page(page_idx)
+
+        # insert_image()는 이미지를 원본(mediabox) 좌표계에 그대로 박아넣는데,
+        # 페이지 자체의 /Rotate가 그 위에 다시 적용되어 화면에 보이므로, 아무
+        # 보정 없이 넣으면 캡처한 화면이 페이지 회전만큼 돌아간 채로 보인다.
+        # 캡처한 그대로(화면에서 본 방향)로 보이게 하려면, 페이지 회전과
+        # 반대 방향(시계방향 (360-rotation)도)으로 미리 돌려서 넣어야 한다.
+        rotation = page.rotation % 360
+        if rotation:
+            pixmap = pixmap.transformed(QTransform().rotate((360 - rotation) % 360))
+
+        if p1 == p2:
+            # 그냥 클릭만 했으면, 캡처 원본 픽셀 크기를 화면 72dpi 기준 PDF 포인트로
+            # 환산해 그 자리에 자연스러운 크기로 놓는다(드래그하면 원하는 크기로).
+            origin = self._to_pdf_point(p1, page_idx, page)
+            w = pixmap.width() * 72 / 96
+            h = pixmap.height() * 72 / 96
+            rect = fitz.Rect(origin.x, origin.y, origin.x + w, origin.y + h)
+        else:
+            pdf_p1 = self._to_pdf_point(p1, page_idx, page)
+            pdf_p2 = self._to_pdf_point(p2, page_idx, page)
+            rect = _normalized_rect(pdf_p1, pdf_p2)
+
+        buf = QBuffer()
+        buf.open(QIODevice.WriteOnly)
+        pixmap.save(buf, "PNG")
+        png_bytes = bytes(buf.data())
+        buf.close()
+
+        self.push_undo()
+        page.insert_image(rect, stream=png_bytes)
+        self._pending_capture_pixmap = None
+        tool_to_restore = self._tool_before_capture
+        self._finish_edit(page_idx)
+        self.set_tool(tool_to_restore)
+        self.captureInserted.emit()
 
     def _finish_edit(self, page_idx: int):
         self.render_single_page(page_idx)
