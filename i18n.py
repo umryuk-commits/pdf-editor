@@ -5,7 +5,7 @@ STRINGS[언어코드][키] = 문자열. tr(key)가 현재 언어의 문자열을
 
 STRINGS = {
     "ko": {
-        "app_title": "PDF Super Viewer",
+        "app_title": "PDF Super Viewer (HWP,MD)",
         "menu_file": "파일",
         "menu_edit": "편집",
         "menu_page": "페이지",
@@ -56,7 +56,7 @@ STRINGS = {
         "prev_page": "< 이전",
         "next_page": "다음 >",
 
-        "status_ready": "PDF 파일을 열어주세요. (파일을 끌어다 놓아도 됩니다)",
+        "status_ready": "PDF, 한글(HWP), 마크다운(MD) 문서를 열어주세요. (파일을 끌어다 놓아도 됩니다)",
         "status_opened": "열림: {path}",
         "status_saved": "저장됨: {path}",
         "status_tool": "도구: {tool}",
@@ -66,9 +66,11 @@ STRINGS = {
         "status_capture_cancelled": "캡처를 취소했습니다.",
         "status_capture_placed": "캡처한 내용을 삽입했습니다.",
 
-        "dialog_open_pdf": "PDF 열기",
+        "dialog_open_pdf": "문서 열기",
         "dialog_save_as": "다른 이름으로 저장",
+        "filter_open": "모든 지원 문서 (*.pdf *.hwp *.hwpx *.md *.markdown);;PDF 파일 (*.pdf);;한글 문서 (*.hwp *.hwpx);;마크다운 (*.md *.markdown);;모든 파일 (*.*)",
         "filter_pdf": "PDF 파일 (*.pdf)",
+        "hwp_save_notice": "한글(HWP) 문서는 원본을 보존하기 위해 PDF 파일로 저장됩니다.",
         "color_dialog_title": "색상 선택",
 
         "open_failed_title": "열기 실패",
@@ -118,7 +120,7 @@ STRINGS = {
         "about_designed_by": "Designed by {name}",
     },
     "en": {
-        "app_title": "PDF Super Viewer",
+        "app_title": "PDF Super Viewer (HWP,MD)",
         "menu_file": "File",
         "menu_edit": "Edit",
         "menu_page": "Page",
@@ -169,7 +171,7 @@ STRINGS = {
         "prev_page": "< Prev",
         "next_page": "Next >",
 
-        "status_ready": "Open a PDF file. (You can also drag & drop one here.)",
+        "status_ready": "Open a PDF, HWP, or Markdown file. (You can also drag & drop one here.)",
         "status_opened": "Opened: {path}",
         "status_saved": "Saved: {path}",
         "status_tool": "Tool: {tool}",
@@ -179,9 +181,11 @@ STRINGS = {
         "status_capture_cancelled": "Screen capture cancelled.",
         "status_capture_placed": "Capture inserted.",
 
-        "dialog_open_pdf": "Open PDF",
+        "dialog_open_pdf": "Open Document",
         "dialog_save_as": "Save As",
+        "filter_open": "All Supported Documents (*.pdf *.hwp *.hwpx *.md *.markdown);;PDF Files (*.pdf);;HWP Documents (*.hwp *.hwpx);;Markdown (*.md *.markdown);;All Files (*.*)",
         "filter_pdf": "PDF Files (*.pdf)",
+        "hwp_save_notice": "HWP documents are saved as PDF files to preserve the original document.",
         "color_dialog_title": "Select Color",
 
         "open_failed_title": "Open Failed",
@@ -231,7 +235,7 @@ STRINGS = {
         "about_designed_by": "Designed by {name}",
     },
     "zh": {
-        "app_title": "PDF Super Viewer",
+        "app_title": "PDF Super Viewer (HWP,MD)",
         "menu_file": "文件",
         "menu_edit": "编辑",
         "menu_page": "页面",
@@ -282,7 +286,7 @@ STRINGS = {
         "prev_page": "< 上一页",
         "next_page": "下一页 >",
 
-        "status_ready": "请打开一个 PDF 文件。(也可以将文件拖放到此处)",
+        "status_ready": "请打开 PDF、HWP 或 Markdown 文件。(也可以将文件拖放到此处)",
         "status_opened": "已打开:{path}",
         "status_saved": "已保存:{path}",
         "status_tool": "工具:{tool}",
@@ -292,9 +296,11 @@ STRINGS = {
         "status_capture_cancelled": "已取消截图。",
         "status_capture_placed": "已插入截图。",
 
-        "dialog_open_pdf": "打开 PDF",
+        "dialog_open_pdf": "打开文档",
         "dialog_save_as": "另存为",
+        "filter_open": "所有支持的文档 (*.pdf *.hwp *.hwpx *.md *.markdown);;PDF 文件 (*.pdf);;HWP 文档 (*.hwp *.hwpx);;Markdown (*.md *.markdown);;所有文件 (*.*)",
         "filter_pdf": "PDF 文件 (*.pdf)",
+        "hwp_save_notice": "为了保护原文件，HWP 文档将保存为 PDF 文件。",
         "color_dialog_title": "选择颜色",
 
         "open_failed_title": "打开失败",
@@ -344,7 +350,7 @@ STRINGS = {
         "about_designed_by": "设计者:{name}",
     },
     "ja": {
-        "app_title": "PDF Super Viewer",
+        "app_title": "PDF Super Viewer (HWP,MD)",
         "menu_file": "ファイル",
         "menu_edit": "編集",
         "menu_page": "ページ",
@@ -395,7 +401,7 @@ STRINGS = {
         "prev_page": "< 前へ",
         "next_page": "次へ >",
 
-        "status_ready": "PDFファイルを開いてください。(ドラッグ&ドロップも可能です)",
+        "status_ready": "PDF、HWP、またはMarkdownファイルを開いてください。(ドラッグ&ドロップも可能です)",
         "status_opened": "開きました: {path}",
         "status_saved": "保存しました: {path}",
         "status_tool": "ツール: {tool}",
@@ -405,9 +411,11 @@ STRINGS = {
         "status_capture_cancelled": "キャプチャをキャンセルしました。",
         "status_capture_placed": "キャプチャを挿入しました。",
 
-        "dialog_open_pdf": "PDFを開く",
+        "dialog_open_pdf": "ドキュメントを開く",
         "dialog_save_as": "名前を付けて保存",
+        "filter_open": "サポートされているすべてのドキュメント (*.pdf *.hwp *.hwpx *.md *.markdown);;PDFファイル (*.pdf);;HWPドキュメント (*.hwp *.hwpx);;Markdown (*.md *.markdown);;すべてのファイル (*.*)",
         "filter_pdf": "PDFファイル (*.pdf)",
+        "hwp_save_notice": "元のファイルを保護するため、HWPドキュメントはPDFファイルとして保存されます。",
         "color_dialog_title": "色の選択",
 
         "open_failed_title": "開けませんでした",

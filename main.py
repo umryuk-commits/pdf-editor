@@ -17,6 +17,8 @@ from PySide6.QtWidgets import (
 )
 
 import icons
+import hwp_loader
+import md_loader
 from canvas import PageCanvas, Tool, TOOL_TR_KEYS, pixmap_from_fitz_pixmap
 from capture_overlay import CaptureOverlay
 from i18n import available_languages, get_language, set_language, tr
@@ -61,6 +63,8 @@ class DocumentView(QWidget):
         super().__init__(parent)
         self.main_window = main_window
         self.path: str | None = None
+        self.is_hwp = False
+        self.is_md = False
         self.modified = False
         self._last_search_text = None
 
@@ -133,7 +137,13 @@ class DocumentView(QWidget):
 
     def label(self) -> str:
         name = os.path.basename(self.path) if self.path else tr("untitled")
-        return f"*{name}" if self.modified else name
+        if getattr(self, "is_hwp", False):
+            prefix = "[HWP] "
+        elif getattr(self, "is_md", False):
+            prefix = "[MD] "
+        else:
+            prefix = ""
+        return f"*{prefix}{name}" if self.modified else f"{prefix}{name}"
 
 
 class MainWindow(QMainWindow):
@@ -164,6 +174,9 @@ class MainWindow(QMainWindow):
         self.page_status_label = QLabel("")
         self.statusBar().addPermanentWidget(self.page_status_label)
         self.statusBar().showMessage(tr("status_ready"))
+
+        # HWP 문서 첫 로딩 지연을 없애기 위해 폰트 버퍼를 백그라운드에서 미리 예열
+        QTimer.singleShot(50, hwp_loader._get_font_buffers)
 
     # ---------- 탭/문서 뷰 ----------
 
@@ -279,14 +292,16 @@ class MainWindow(QMainWindow):
     # ---------- 드래그 앤 드롭 ----------
 
     def dragEnterEvent(self, event):
+        SUPPORTED_EXTS = (".pdf", ".hwp", ".hwpx", ".md", ".markdown")
         if event.mimeData().hasUrls() and any(
-                url.toLocalFile().lower().endswith(".pdf") for url in event.mimeData().urls()):
+                url.toLocalFile().lower().endswith(SUPPORTED_EXTS) for url in event.mimeData().urls()):
             event.acceptProposedAction()
 
     def dropEvent(self, event):
+        SUPPORTED_EXTS = (".pdf", ".hwp", ".hwpx", ".md", ".markdown")
         for url in event.mimeData().urls():
             path = url.toLocalFile()
-            if path.lower().endswith(".pdf"):
+            if path.lower().endswith(SUPPORTED_EXTS):
                 self._open_path(path)
 
     # ---------- 페이지 썸네일 사이드바 ----------
@@ -673,7 +688,7 @@ class MainWindow(QMainWindow):
     # ---------- 파일 열기/저장 ----------
 
     def open_file(self):
-        path, _ = QFileDialog.getOpenFileName(self, tr("dialog_open_pdf"), "", tr("filter_pdf"))
+        path, _ = QFileDialog.getOpenFileName(self, tr("dialog_open_pdf"), "", tr("filter_open"))
         if not path:
             return
         self._open_path(path)
@@ -686,14 +701,23 @@ class MainWindow(QMainWindow):
                 self.tabs.setCurrentIndex(i)
                 return
 
+        is_hwp = hwp_loader.is_hwp_file(path) or path.lower().endswith((".hwp", ".hwpx"))
+        is_md = md_loader.is_md_file(path)
         try:
-            doc = fitz.open(path)
+            if is_hwp:
+                doc = hwp_loader.load_hwp_as_fitz_doc(path)
+            elif is_md:
+                doc = md_loader.load_md_as_fitz_doc(path)
+            else:
+                doc = fitz.open(path)
         except Exception as exc:
             QMessageBox.critical(self, tr("open_failed_title"), tr("open_failed_msg", exc=exc))
             return
 
         view = DocumentView(self)
         view.path = path
+        view.is_hwp = is_hwp
+        view.is_md = is_md
         index = self.tabs.addTab(view, view.label())
         self.tabs.setCurrentIndex(index)
 
@@ -709,7 +733,10 @@ class MainWindow(QMainWindow):
     def save_file(self):
         if not self.canvas or not self.canvas.doc:
             return
-        if not self.current_path:
+        view = self.current_view()
+        # HWP/MD 문서는 원본 포맷 훼손을 방지하기 위해 항상 PDF로 다른 이름 저장 유도
+        is_virtual = (view and (getattr(view, "is_hwp", False) or getattr(view, "is_md", False)))
+        if not self.current_path or is_virtual:
             self.save_file_as()
             return
         self._save_to(self.current_path)
@@ -717,11 +744,21 @@ class MainWindow(QMainWindow):
     def save_file_as(self):
         if not self.canvas or not self.canvas.doc:
             return
-        path, _ = QFileDialog.getSaveFileName(self, tr("dialog_save_as"), "", tr("filter_pdf"))
+        view = self.current_view()
+        default_dir = ""
+        if self.current_path:
+            base_dir = os.path.dirname(self.current_path)
+            base_name = os.path.splitext(os.path.basename(self.current_path))[0] + ".pdf"
+            default_dir = os.path.join(base_dir, base_name)
+
+        path, _ = QFileDialog.getSaveFileName(self, tr("dialog_save_as"), default_dir, tr("filter_pdf"))
         if not path:
             return
         if self._save_to(path):
             self.current_path = path
+            if view:
+                view.is_hwp = False
+                view.is_md = False  # PDF 파일로 변환 저장됨
             self._refresh_view_chrome(self.current_view())
 
     def _save_to(self, path: str) -> bool:
@@ -1025,9 +1062,10 @@ def main():
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()
-    # Windows에서 PDF 파일을 더블클릭해서 열면, 그 파일 경로가 명령줄 인자로 넘어온다.
+    # Windows에서 PDF, HWP, MD 파일을 더블클릭해서 열면, 그 파일 경로가 명령줄 인자로 넘어온다.
+    SUPPORTED_EXTS = (".pdf", ".hwp", ".hwpx", ".md", ".markdown")
     for arg in sys.argv[1:]:
-        if arg.lower().endswith(".pdf") and os.path.isfile(arg):
+        if (arg.lower().endswith(SUPPORTED_EXTS) or hwp_loader.is_hwp_file(arg) or md_loader.is_md_file(arg)) and os.path.isfile(arg):
             window._open_path(os.path.abspath(arg))
             break
     sys.exit(app.exec())

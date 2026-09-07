@@ -1,7 +1,7 @@
-# PDF Super Viewer
+# PDF Super Viewer (HWP,MD)
 
-Windows용 가벼운 PDF 뷰어 + 편집기입니다. Python(PySide6 + PyMuPDF)으로 만들어졌고,
-설치 파일 없이 스크립트 하나로 실행합니다.
+Windows용 가벼운 PDF & 한글(HWP/HWPX) & 마크다운(MD) 뷰어 + 편집기입니다. Python(PySide6 + PyMuPDF)으로 만들어졌고,
+설치 파일 없이 스크립트 하나로 실행합니다. HWP 문서 및 마크다운 문서는 전용 프로그램 미설치 환경에서도 자체 파서로 즉시 열람하고 주석을 달 수 있습니다.
 
 ## 실행 방법
 
@@ -36,7 +36,7 @@ Windows용 가벼운 PDF 뷰어 + 편집기입니다. Python(PySide6 + PyMuPDF)�
 명령어로 실행하려면:
 
 ```
-cd C:\Users\user\claude-workspace\pdf-editor
+cd C:\Users\user\gemini-workspace\pdf-editor
 venv\Scripts\python.exe main.py
 ```
 
@@ -51,10 +51,18 @@ Python(`python main.py`)으로 실행하면 PySide6/PyMuPDF가 없어서 바로 
 ## 기능
 
 **보기**
-- 여러 PDF를 탭으로 동시에 열어놓고 전환할 수 있습니다 (브라우저 탭처럼). 같은
+- 여러 PDF, 한글(HWP, HWPX), 마크다운(MD, MARKDOWN) 문서를 탭으로 동시에 열어놓고 전환할 수 있습니다 (브라우저 탭처럼). 같은
   파일을 또 열면 새 탭을 만들지 않고 기존 탭으로 이동합니다. 파일을 여러 개
   한꺼번에 끌어다 놓으면 각각 새 탭으로 열립니다. 탭의 × 버튼이나 Ctrl+W로
   탭을 닫을 수 있고, 저장 안 된 내용이 있으면 닫기 전에 물어봅니다.
+- **마크다운(MD/MARKDOWN) 문서 읽기 지원** — 기술 문서, README, 기획서 등 마크다운 파일을
+  가독성 높은 전문 테크니컬 문서 스타일의 가상 PDF로 실시간 렌더링합니다. 제목(H1~H4), 본문, 코드 블록(```),
+  인용구(>), 순서/불릿 목록, 표(Markdown Table) 등을 완벽히 파싱하여 깨끗하게 보여주며, 검색(Ctrl+F), 주석, 인쇄, PDF 내보내기를 모두 지원합니다.
+- **한글(HWP/HWPX) 문서 완벽 지원** — 한컴오피스 프로그램이 설치되지 않은 환경에서도
+  자체 파서(HWP 5.0 OLE2 바이너리 및 HWPX OWPML XML 파서)를 통해 문서 본문과 복잡한 표(Rowspan/Colspan 가변 너비 그리드 및 테두리/배경색)를 읽어와
+  A4 규격의 가상 PDF로 즉시 변환·열람합니다. 한글 문서에서도 텍스트 검색(Ctrl+F), 형광펜,
+  메모, 도형 그리기, 화면 캡처 삽입, 인쇄 등 모든 기능을 그대로 사용할 수 있으며, 원본 보호를
+  위해 안전하게 PDF 파일로 내보내기/저장됩니다 (한컴오피스가 설치된 환경에서는 고품질 변환 자동 우선 적용).
 - 파일 열기 / 저장 / 다른 이름으로 저장 (또는 창에 파일을 끌어다 놓기)
 - 여러 페이지는 연속 스크롤로 이어보기 (스크롤만 하면 다음 페이지로 자연스럽게 넘어감)
 - 왼쪽 페이지 목록(썸네일)에서 클릭으로 바로 이동
@@ -123,12 +131,13 @@ Python(`python main.py`)으로 실행하면 PySide6/PyMuPDF가 없어서 바로 
 pdf-editor/
 ├─ main.py                 # 메인 윈도우 — 툴바/메뉴, 탭 관리, 파일 열기·저장
 ├─ canvas.py                # PDF 페이지 렌더링 + 도구별 마우스 동작 처리
+├─ hwp_loader.py            # HWP / HWPX 문서 파서 및 PDF 변환 로더
 ├─ capture_overlay.py       # 화면 사각형 캡처 오버레이(캡처 기능)
 ├─ icons.py                 # 툴바 아이콘(QPainter로 직접 그림, 외부 파일 없음)
 ├─ print_dialog.py          # 자체 인쇄 대화상자 (프린터/방향/매수/범위 + 미리보기)
 ├─ i18n.py                  # 한국어/English/中文/日本語 번역 문자열
 ├─ version.py               # 버전/제작 정보 (새 버전 낼 때 이 파일만 수정)
-├─ requirements.txt         # 필요한 라이브러리 목록 (PySide6, PyMuPDF)
+├─ requirements.txt         # 필요한 라이브러리 목록 (PySide6, PyMuPDF, olefile)
 ├─ PDF Super Viewer.spec    # PyInstaller 빌드 설정 (재빌드 시 사용)
 ├─ README.md
 └─ .gitignore
