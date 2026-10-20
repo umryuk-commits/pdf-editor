@@ -21,3 +21,9 @@ sample/
 # OS/에디터 임시 파일
 .DS_Store
 Thumbs.db
+
+# 블로그 및 임시 스크린샷 산출물 (저장소 공개 제외)
+screenshots/
+generate_screenshots.py
+build_blog_html.py
+blog_post_pdf_super_viewer.html
