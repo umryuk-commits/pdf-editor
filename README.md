@@ -36,7 +36,7 @@ Windows용 가벼운 PDF & 한글(HWP/HWPX) & 마크다운(MD) 뷰어용 편집�
 명령어로 실행하려면:
 
 ```
-cd C:\Users\user\gemini-workspace\pdf-editor
+cd pdf-editor
 venv\Scripts\python.exe main.py
 ```
 
