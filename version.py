@@ -6,11 +6,13 @@ APP_STAGE = "Beta"
 APP_PUBLISHER = "RUM Soft"
 APP_DESIGNER = "RUM"
 APP_REPO = "https://github.com/umryuk-commits/pdf-editor"
+APP_KOFI = "https://ko-fi.com/umr436651"
 APP_LICENSE = (
     "Copyright (c) 2026 RUM. All rights reserved.\n"
     "This project is licensed under the terms of the GNU AGPLv3 license.\n"
     "본 프로그램은 GNU AGPLv3 라이선스를 따르는 오픈소스 소프트웨어입니다.\n"
     f"GitHub: {APP_REPO}\n"
+    f"후원 (Ko-fi): {APP_KOFI}\n"
     "(자세한 사항은 LICENSE.txt를 참고하세요.)"
 )
 

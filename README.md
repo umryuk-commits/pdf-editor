@@ -171,3 +171,11 @@ Windows는 보안상 기본 앱 설정을 프로그램이 직접 바꾸지 못�
 `version.py`에 버전/제작 정보가 있습니다. 새 버전을 낼 때는 이 파일의
 `APP_VERSION`(날짜)과 `APP_STAGE`(Beta 등)만 바꾸면 도움말 > 정보 창에 자동으로
 반영됩니다.
+
+## ☕ 후원하기 (Sponsor)
+
+PDF Super Viewer 프로젝트가 마음에 드셨거나 업무에 도움이 되셨다면 따뜻한 커피 한 잔으로 개발을 응원해 주세요!
+
+[![Ko-Fi](https://img.shields.io/badge/Ko--fi-F16061?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/umr436651)
+
+* **Ko-fi 후원 링크:** [https://ko-fi.com/umr436651](https://ko-fi.com/umr436651)
