@@ -1,6 +1,6 @@
 # PDF Super Viewer (HWP,MD)
 
-Windows용 가벼운 PDF & 한글(HWP/HWPX) & 마크다운(MD) 뷰어 + 편집기입니다. Python(PySide6 + PyMuPDF)으로 만들어졌고,
+Windows용 가벼운 PDF & 한글(HWP/HWPX) & 마크다운(MD) 뷰어용 편집기입니다. Python(PySide6 + PyMuPDF)으로 만들어졌고,
 설치 파일 없이 스크립트 하나로 실행합니다. HWP 문서 및 마크다운 문서는 전용 프로그램 미설치 환경에서도 자체 파서로 즉시 열람하고 주석을 달 수 있습니다.
 
 ## 실행 방법
