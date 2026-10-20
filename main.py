@@ -23,7 +23,7 @@ from canvas import PageCanvas, Tool, TOOL_TR_KEYS, pixmap_from_fitz_pixmap
 from capture_overlay import CaptureOverlay
 from i18n import available_languages, get_language, set_language, tr
 from print_dialog import PrintDialog
-from version import APP_DESIGNER, APP_LICENSE, APP_PUBLISHER, APP_STAGE, APP_VERSION
+from version import APP_DESIGNER, APP_LICENSE, APP_PUBLISHER, APP_STAGE, APP_VERSION, APP_REPO, APP_KOFI
 
 TOOL_ORDER = [
     Tool.NONE, Tool.HIGHLIGHT, Tool.UNDERLINE, Tool.STRIKEOUT, Tool.NOTE,
@@ -669,14 +669,32 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, tr("app_title"), tr("lang_changed"))
 
     def show_about(self):
-        text = (
-            f"{tr('app_title')}\n"
-            f"{APP_LICENSE}\n\n"
-            f"{APP_PUBLISHER}\n"
-            f"Rev. {APP_VERSION} ({APP_STAGE})\n"
-            f"{tr('about_designed_by', name=APP_DESIGNER)}"
+        msg = QMessageBox(self)
+        msg.setWindowTitle(tr("about"))
+        msg.setTextFormat(Qt.RichText)
+        msg.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        
+        # HTML 서식으로 하이퍼링크를 클릭 가능하도록 렌더링
+        html_license = (
+            "Copyright (c) 2026 RUM. All rights reserved.<br>"
+            "This project is licensed under the terms of the GNU AGPLv3 license.<br>"
+            "본 프로그램은 GNU AGPLv3 라이선스를 따르는 오픈소스 소프트웨어입니다.<br><br>"
+            f"<b>GitHub:</b> <a href='{APP_REPO}'>{APP_REPO}</a><br>"
+            f"<b>후원 (Ko-fi):</b> <a href='{APP_KOFI}'>{APP_KOFI}</a><br><br>"
+            "(자세한 사항은 LICENSE.txt를 참고하세요.)"
         )
-        QMessageBox.about(self, tr("about"), text)
+        
+        html_text = (
+            f"<h3 style='margin-bottom: 8px;'>{tr('app_title')}</h3>"
+            f"<p style='color: #444; line-height: 1.5;'>{html_license}</p>"
+            f"<hr style='border: 0; border-top: 1px solid #ddd; margin: 12px 0;'>"
+            f"<p><b>{APP_PUBLISHER}</b><br>"
+            f"Rev. {APP_VERSION} ({APP_STAGE})<br>"
+            f"{tr('about_designed_by', name=APP_DESIGNER)}</p>"
+        )
+        msg.setText(html_text)
+        msg.setStandardButtons(QMessageBox.Ok)
+        msg.exec()
 
     # ---------- 인쇄 ----------
 
