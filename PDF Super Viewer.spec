@@ -5,6 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
+    datas=[('LICENSE.txt', '.')],
     hiddenimports=['olefile', 'hwp_loader', 'md_loader'],
     hooksconfig={},
     runtime_hooks=[],

@@ -70,7 +70,8 @@ class DocumentView(QWidget):
 
         self.canvas = PageCanvas()
         self.canvas.documentChanged.connect(lambda v=self: main_window._on_document_changed(v))
-        self.canvas.zoomRequested.connect(lambda factor: main_window.set_zoom(self.canvas.zoom * factor))
+        self.canvas.zoomRequested.connect(
+            lambda factor, pos: main_window.set_zoom(self.canvas.zoom * factor, anchor_canvas_pt=pos))
         self.canvas.pageChanged.connect(main_window._refresh_page_ui)
         self.canvas.undoAvailable.connect(lambda _avail: main_window._sync_undo_redo_actions())
         self.canvas.redoAvailable.connect(lambda _avail: main_window._sync_undo_redo_actions())
@@ -89,7 +90,7 @@ class DocumentView(QWidget):
         self.scroll.setWidget(self.page_area)
         self.scroll.setAlignment(Qt.AlignCenter)
         self.scroll.setStyleSheet("QScrollArea { background-color: #6e6e6e; border: none; }")
-        self.scroll.verticalScrollBar().valueChanged.connect(lambda v=self: main_window._on_scrolled(v))
+        self.scroll.verticalScrollBar().valueChanged.connect(lambda _val, v=self: main_window._on_scrolled(v))
 
         self.search_bar = self._build_search_bar(main_window)
 
@@ -798,6 +799,9 @@ class MainWindow(QMainWindow):
         if not tops:
             return
         index = max(0, min(index, len(tops) - 1))
+        self.canvas.page_index = index
+        self._refresh_page_ui()
+        self._sync_thumb_selection(index)
         target_y = self.canvas.y() + int(tops[index])
         self.scroll.verticalScrollBar().setValue(target_y)
 
@@ -838,12 +842,51 @@ class MainWindow(QMainWindow):
         self.page_count_label.setText(f"/ {total}")
         self.page_status_label.setText(tr("page_indicator", current=current, total=total))
 
-    def set_zoom(self, zoom: float):
-        if not self.canvas:
+    def set_zoom(self, zoom: float, anchor_canvas_pt: QPoint | None = None):
+        """확대/축소 시 현재 보고 있는 페이지 및 위치가 튀지 않고 자연스럽게 유지되도록 보존."""
+        view = self.current_view()
+        if not view or not self.canvas or not self.canvas.doc or not self.canvas.page_tops:
             return
+
+        viewport = self.scroll.viewport()
+        viewport_h = viewport.height()
+
+        # 1. 줌 적용 전 기준 위치(anchor) 계산
+        canvas_pt_y = self.canvas.mapTo(viewport, QPoint(0, 0)).y()
+        if anchor_canvas_pt is not None:
+            pt_in_canvas_y = anchor_canvas_pt.y()
+            anchor_viewport_y = canvas_pt_y + pt_in_canvas_y
+        else:
+            anchor_viewport_y = viewport_h / 2
+            pt_in_canvas_y = -canvas_pt_y + anchor_viewport_y
+
+        anchor_page = self.canvas.page_at_y(pt_in_canvas_y)
+        if anchor_page is None:
+            anchor_page = self._current_center_page()
+
+        old_top = self.canvas.page_tops[anchor_page]
+        old_h = self.canvas.page_sizes[anchor_page][1]
+        rel_y = (pt_in_canvas_y - old_top) / max(1, old_h)
+
+        # 2. 새로운 줌 적용 및 캔버스 영역 동기화
         self.canvas.set_zoom(zoom)
         self.zoom_label.setText(f"{round(self.canvas.zoom / 1.5 * 100)}%")
-        self.scroll_to_page(self.canvas.page_index)
+        view._resync_page_area()
+
+        # 3. 새 배율 기준 스크롤 위치 복원
+        new_top = self.canvas.page_tops[anchor_page]
+        new_h = self.canvas.page_sizes[anchor_page][1]
+        new_pt_in_canvas_y = new_top + rel_y * new_h
+
+        target_scroll_y = int(self.canvas.y() + new_pt_in_canvas_y - anchor_viewport_y)
+        max_scroll = self.scroll.verticalScrollBar().maximum()
+        target_scroll_y = max(0, min(target_scroll_y, max_scroll))
+        self.scroll.verticalScrollBar().setValue(target_scroll_y)
+
+        # 4. 페이지 인덱스 및 UI 동기화
+        self.canvas.page_index = anchor_page
+        self._refresh_page_ui()
+        self._sync_thumb_selection(anchor_page)
 
     def fit_width(self):
         if not self.canvas or not self.canvas.doc:

@@ -13,6 +13,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QWidget, QInputDialog, QMenu
 
 from i18n import tr
+import hwp_loader
 
 
 class Tool(str, Enum):
@@ -63,20 +64,29 @@ HANDLE_CURSORS = {
 }
 
 
+def _resolve_font(page: fitz.Page, text: str, fallback_fontname: str = "helv", is_bold: bool = False):
+    """텍스트에 한글/비-ASCII 유니코드 문자가 포함되어 있으면 시스템 맑은 고딕(malgun)을 등록하여 반환."""
+    has_non_ascii = any(ord(c) > 127 for c in text)
+    if not has_non_ascii:
+        return fallback_fontname, None
+
+    reg_buf, bold_buf = hwp_loader._get_font_buffers()
+    buf = (bold_buf if is_bold and bold_buf else reg_buf)
+    if buf:
+        fname = "malgunbd" if is_bold and bold_buf else "malgun"
+        try:
+            page.insert_font(fontname=fname, fontbuffer=buf)
+            return fname, fitz.Font(fontbuffer=buf)
+        except Exception:
+            pass
+    return fallback_fontname, None
+
+
 def _fit_textbox(page: fitz.Page, rect: fitz.Rect, text: str,
                   start_size: float = 11, min_size: float = 6,
-                  fontname: str = "helv", color=None, rotate: int = 0):
-    """rect에 text가 들어가도록 폰트 크기를 줄여가며 삽입.
-
-    insert_textbox()는 글자가 다 안 들어가면 반환값이 음수이고,
-    이 경우 아무 텍스트도 그려지지 않는다 (조용히 버려짐). 그래서
-    약간의 여백을 더하고, 안 들어가면 폰트를 줄여서 재시도한다.
-
-    `rotate`는 페이지의 `page.rotation`을 그대로 넘겨야 한다 — 원본 PDF의
-    텍스트는 페이지 회전이 적용된 뒤 화면에서 올바로 읽히도록 mediabox
-    좌표계 안에서 미리 그만큼 돌아간 방향으로 그려져 있어서, 새로 넣는
-    텍스트도 같은 각도로 안 돌리면 회전된 페이지에서 방향이 어긋나 보인다.
-    """
+                  fontname: str = "helv", color=None, rotate: int = 0, is_bold: bool = False):
+    """rect에 text가 들어가도록 폰트 크기를 줄여가며 삽입. 한글/특수문자도 맑은고딕으로 온전히 출력."""
+    fontname, _ = _resolve_font(page, text, fontname, is_bold=is_bold)
     padded = fitz.Rect(rect.x0, rect.y0, rect.x1, rect.y1 + 4)
     fontsize = start_size
     while fontsize >= min_size:
@@ -163,15 +173,19 @@ def _remaining_width(page: fitz.Page, origin, rotation: int) -> float:
 
 def _insert_text_fit(page: fitz.Page, origin, text: str, start_size: float,
                       fontname: str, color, max_width: float, min_size: float = 6,
-                      rotate: int = 0):
+                      rotate: int = 0, is_bold: bool = False):
     """origin(기준선 좌표)에 text를 그리되, max_width를 넘으면 글꼴을 줄여서 맞춘다.
 
     `rotate`는 `page.rotation`을 그대로 넘겨야 회전된 페이지에서도 기존 글자와
     같은 방향으로 그려진다(자세한 이유는 `_fit_textbox`의 설명 참고).
     """
+    fontname, font_obj = _resolve_font(page, text, fontname, is_bold=is_bold)
     fontsize = start_size
     while fontsize > min_size:
-        width = fitz.get_text_length(text, fontname=fontname, fontsize=fontsize)
+        if font_obj is not None:
+            width = font_obj.text_length(text, fontsize=fontsize)
+        else:
+            width = fitz.get_text_length(text, fontname=fontname, fontsize=fontsize)
         if width <= max_width:
             break
         fontsize -= 0.5
@@ -249,7 +263,7 @@ class PageCanvas(QWidget):
 
     documentChanged = Signal()
     statusMessage = Signal(str)
-    zoomRequested = Signal(float)
+    zoomRequested = Signal(float, QPoint)
     pageChanged = Signal()
     undoAvailable = Signal(bool)
     redoAvailable = Signal(bool)
@@ -800,7 +814,8 @@ class PageCanvas(QWidget):
     def wheelEvent(self, event):
         if event.modifiers() & Qt.ControlModifier:
             factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
-            self.zoomRequested.emit(factor)
+            pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+            self.zoomRequested.emit(factor, pos)
             event.accept()
         else:
             event.ignore()
@@ -971,7 +986,9 @@ class PageCanvas(QWidget):
                 self, tr("freetext_title"), tr("freetext_label"))
             if ok and text.strip():
                 self.push_undo()
+                fontname, _ = _resolve_font(page, text, "helv")
                 annot = page.add_freetext_annot(rect, text, fontsize=12,
+                                                 fontname=fontname,
                                                  text_color=(0, 0, 0),
                                                  fill_color=(1, 1, 0.75))
                 annot.update()
@@ -991,18 +1008,19 @@ class PageCanvas(QWidget):
                 if text.strip():
                     if target:
                         fontname = _map_fontname(target["font"], target["flags"])
+                        is_bold = "bold" in (target.get("font") or "").lower() or bool(target.get("flags", 0) & 16)
                         color = _color_int_to_rgb(target["color"])
                         if target["single_line"] and "\n" not in text:
                             max_width = _remaining_width(
                                 page, target["origin"], page.rotation) - 10
                             _insert_text_fit(page, target["origin"], text,
                                               target["size"], fontname, color, max_width,
-                                              rotate=page.rotation)
+                                              rotate=page.rotation, is_bold=is_bold)
                         else:
                             _fit_textbox(page, edit_rect, text,
                                          start_size=target["size"],
                                          fontname=fontname, color=color,
-                                         rotate=page.rotation)
+                                         rotate=page.rotation, is_bold=is_bold)
                     else:
                         _fit_textbox(page, edit_rect, text, rotate=page.rotation)
                 self._finish_edit(page_idx)
